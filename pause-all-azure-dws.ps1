@@ -15,8 +15,8 @@
 #> 
 
 param (
-	[Parameter(Mandatory=$true)][string]$keyVaultName
-	[Parameter(Mandatory=$true)][string]$connStrSecretName
+    [Parameter(Mandatory=$true)][string]$keyVaultName,
+    [Parameter(Mandatory=$true)][string]$connStrSecretName,
     [bool]$debug = $false
 )
 
