@@ -15,6 +15,8 @@
 #> 
 
 param (
+	[Parameter(Mandatory=$true)][string]$keyVaultName
+	[Parameter(Mandatory=$true)][string]$connStrSecretName
     [bool]$debug = $false
 )
 
@@ -120,8 +122,8 @@ for ($i = 0; $i -lt $AzureSynapseWorkspaces.Count; $i++) {
         elseif ($SynapseSqlPool.Status -eq "Online") {
             Write-Output "  -> Synapse SQL Pool [$($SynapseSqlPool.SqlPoolName)] found with status [Online]"
             Write-Output "  -> Checking if Synapse SQL Pool [$($SynapseSqlPool.SqlPoolName)] has been idle for the past 30 minutes"
-            $kv = Get-AzKeyVault -VaultName "kv-gtp-lakehouse*"
-            $connstring = Get-AzKeyVaultSecret -VaultName $kv.VaultName -Name "conn-synw" -AsPlainText
+            $kv = Get-AzKeyVault -VaultName $keyVaultName
+            $connstring = Get-AzKeyVaultSecret -VaultName $kv.VaultName -Name $connStrSecretName -AsPlainText
 
             $params = @{
             	'ConnectionString' = $connstring
