@@ -42,27 +42,21 @@ $ErrorActionPreference = "Continue"
 #CONNECT TO AZURE
 ##########################################################################################################################################################
 
-#Connect-AzAccount -Subscription $SubscriptionId
-#Below process will authenticate with your current windows account
+# Ensures you do not inherit an AzContext in your runbook
+Disable-AzContextAutosave -Scope Process | Out-Null
 
-$Context = Get-AzContext
-
-if ($Context -eq $null) {
-    Write-Information "Need to login"
-    Connect-AzAccount -Subscription $SubscriptionId
-}
-else
+# Connect using a Managed Service Identity
+try
 {
-    Write-Host "Context exists"
-    Write-Host "Current credential is $($Context.Account.Id)"
-    if ($Context.Subscription.Id -ne $SubscriptionId) {
-        $result = Select-AzSubscription -Subscription $SubscriptionId
-        Write-Host "Current subscription is $($result.Subscription.Name)"
-    }
-    else {
-        Write-Host "Current subscription is $($Context.Subscription.Name)"    
-    }
+    $AzureContext = (Connect-AzAccount -Identity).context
+	Set-AzContext -SubscriptionName $AzureContext.Subscription -DefaultProfile $AzureContext
 }
+catch
+{
+    Write-Output "There is no system-assigned user identity. Aborting."; 
+    exit
+}
+
 ########################################################################################################
 
 
