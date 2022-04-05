@@ -160,6 +160,7 @@ for ($i = 0; $i -lt $AzureSynapseWorkspaces.Count; $i++) {
             # Pause Synapse SQL Pool
             $startTimePause = Get-Date
             Write-Output "  -> Pausing Synapse SQL Pool [$($SynapseSqlPool.SqlPoolName)]"
+            $resultsynapseSqlPool = $SynapseSqlPool | Suspend-AzSqlDatabase
                         
             # Show that the Synapse SQL Pool has been pause and how long it took
             $endTimePause = Get-Date
