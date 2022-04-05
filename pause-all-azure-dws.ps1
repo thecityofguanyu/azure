@@ -1,20 +1,20 @@
 <#   
 .NOTES     
-    Author: Sergio Fonseca
-    Twitter @FonsecaSergio
-    Email: sergio.fonseca@microsoft.com
-    Last Updated: 2022-01-21
+    Author: Chris A. Evans
+    Email: thecityofguanyu@outlook.com
 
-.SYNOPSIS   
+.SYNOPSIS
+    Stops inactive Azure Synapse Workspace Dedicated Pools 
    
-.DESCRIPTION    
-    https://docs.microsoft.com/en-us/azure/automation/automation-alert-metric
+.DESCRIPTION
+    A crude frankenstein amalgam of the following:
+      * https://github.com/FonsecaSergio/ScriptCollection/blob/master/Powershell/Synapse%20-%20Pause%20all%20DWs%20-%20Automation%20Acount.ps1
+      * https://github.com/sagu94271/seaa/blob/main/Devops/Powershell/autoshutsynapsesqlpool.ps1
  
-.PARAMETER SubscriptionId  
-       
+.PARAMETER debug  
 #> 
+
 param (
-    [string]$SubscriptionId = "de41dc76-12ed-4406-a032-0c96495def6b",
     [bool]$debug = $false
 )
 
@@ -25,6 +25,7 @@ Clear-Host
 Import-Module Az.Accounts
 Import-Module Az.Sql
 Import-Module Az.Synapse
+Import-Module SqlServer
 ##########################################################################################################################################################
 #Parameters
 ##########################################################################################################################################################
@@ -69,16 +70,12 @@ Write-Output "Get SQL / Synapse RESOURCES"
 Write-Output "---------------------------------------------------------------------------------------------------"
 
 try {
-    $AzureSQLServers = @(Get-AzSqlServer -ErrorAction Stop)
-    $AzureSynapseWorkspaces = @(Get-AzSynapseWorkspace | Where-Object { $_.ExtraProperties.WorkspaceType -eq "Normal" } -ErrorAction Stop)#Filter connected synapse workspace with former SQL DW. Pause commands are different
+    $AzureSynapseWorkspaces = @(Get-AzSynapseWorkspace | Where-Object { $_.ExtraProperties.WorkspaceType -eq "Normal" } -ErrorAction Stop)
 }
 catch {
     $iErrorCount += 1;
     Write-Error $_.Exception.Message
 }
-
-#$AzureSynapseWorkspaces | Out-GridView
-#$AzureSQLServers | Out-GridView
 
 ##########################################################################################################################################################
 # Loop through all Synapse Workspaces
@@ -122,6 +119,37 @@ for ($i = 0; $i -lt $AzureSynapseWorkspaces.Count; $i++) {
         ##########################################################################################################################################################
         elseif ($SynapseSqlPool.Status -eq "Online") {
             Write-Output "  -> Synapse SQL Pool [$($SynapseSqlPool.SqlPoolName)] found with status [Online]"
+            Write-Output "  -> Checking if Synapse SQL Pool [$($SynapseSqlPool.SqlPoolName)] has been idle for the past 30 minutes"
+            $kv = Get-AzKeyVault -VaultName "kv-gtp-lakehouse*"
+            $connstring = Get-AzKeyVaultSecret -VaultName $kv.VaultName -Name "conn-synw" -AsPlainText
+
+            $params = @{
+            	'ConnectionString' = $connstring
+            	'OutputSqlErrors'  = $true
+            	'Query'            = 'if exists
+            	( select * from sys.dm_pdw_exec_sessions where status in (''ACTIVE'',''IDLE'') and (session_id <> session_id()) 
+            	and (app_name not in (''Internal'',''DWShellDb'')) and (status in (''IDLE'') and login_time > DATEADD(minute, -30, GETDATE()))
+            	)
+            		begin
+            			select 1;
+            		end
+            	else
+            		begin
+            			select 0;
+            		end'
+            	}
+
+            $transactions = Invoke-Sqlcmd  @params
+            if ($transactions.Column1 -ne 0)
+            {
+            	Write-Output "  -> There are active transactions with 30 minutes. Not pausing"
+            	continue
+            }
+            else
+            {
+            	Write-Output "  -> No activte transactions detected. Moving forward with pause operation."
+            }
+
             # Pause Synapse SQL Pool
             $startTimePause = Get-Date
             Write-Output "  -> Pausing Synapse SQL Pool [$($SynapseSqlPool.SqlPoolName)]"
@@ -154,89 +182,6 @@ for ($i = 0; $i -lt $AzureSynapseWorkspaces.Count; $i++) {
         }
         ##########################################################################################################################################################
     }    
-}
-
-
-
-##########################################################################################################################################################
-# Loop through all SQL Servers (former SQLDW)
-##########################################################################################################################################################
-Write-Output ""
-Write-Output  "---------------------------------------------------------------------------------------------------"
-Write-Output  "Loop through all SQL Servers (former SQLDW)"
-Write-Output  "---------------------------------------------------------------------------------------------------"
-
-for ($i = 0; $i -lt $AzureSQLServers.Count; $i++) {
-    $AzureSQLServer = $AzureSQLServers[$i]
-
-    # Log which SQL Servers are checked and in which resource group
-    Write-Output " ***************************************************************************************"    
-    Write-Output " Checking SQL Server [$($AzureSQLServer.ServerName)] in Resource Group [$($AzureSQLServer.ResourceGroupName)] for Synapse SQL Pools"
-    
-    #Check if server os part of Azure Synapse Workspace
-    $isServerSynapseWorkspace = $false
-
-    foreach ($AzureSynapseWorkspace in $AzureSynapseWorkspaces) {
-        if ($AzureSynapseWorkspace.Name -eq $AzureSQLServer.ServerName) {
-            $isServerSynapseWorkspace = $true
-            Write-Output " -> This Server is part of Synapse Workspace - Ignore here Should be done above using Az.Synapse Module"
-        }
-    }
-
-    if (!$isServerSynapseWorkspace) {
-
-        # Get all databases from a SQL Server, but filter on Edition = "DataWarehouse"
-        $allSynapseSqlPools = Get-AzSqlDatabase `
-            -ResourceGroupName $AzureSQLServer.ResourceGroupName `
-            -ServerName $AzureSQLServer.ServerName `
-        | Where-Object { $_.Edition -eq "DataWarehouse" }
-
-    
-        # Loop through each found Synapse SQL Pool
-        foreach ($SynapseSqlPool in $allSynapseSqlPools) {
-
-            ##########################################################################################################################################################
-
-            if ($SynapseSqlPool.Status -eq "Paused") {
-                Write-Output  "  -> Synapse SQL Pool [$($SynapseSqlPool.DatabaseName)] found with status [Paused]"
-            }
-            ##########################################################################################################################################################
-            elseif ($SynapseSqlPool.Status -eq "Online") {
-                Write-Output  "  -> Synapse SQL Pool [$($SynapseSqlPool.DatabaseName)] found with status [Online]"
-                # Pause Synapse SQL Pool
-                $startTimePause = Get-Date
-                Write-Output  "  -> Pausing Synapse SQL Pool [$($SynapseSqlPool.DatabaseName)]"
-
-                if (!$debug) {
-                    $resultsynapseSqlPool = $SynapseSqlPool | Suspend-AzSqlDatabase
-                }
-
-                # Show that the Synapse SQL Pool has been pause and how long it took
-                $endTimePause = Get-Date
-                $durationPause = NEW-TIMESPAN –Start $startTimePause –End $endTimePause
-
-                if ($resultsynapseSqlPool.Status -eq "Paused") {
-                    Write-Output "  -> Synapse SQL Pool [$($resultsynapseSqlPool.DatabaseName)] paused in $($durationPause.Hours) hours, $($durationPause.Minutes) minutes and $($durationPause.Seconds) seconds. Current status [$($resultsynapseSqlPool.Status)]"
-                }
-                else {
-                    if (!$debug) {
-                        $iErrorCount += 1;
-                        Write-Error "  -> (resultsynapseSqlPool.Status -eq ""Paused"") Synapse SQL Pool [$($resultsynapseSqlPool.DatabaseName)] paused in $($durationPause.Hours) hours, $($durationPause.Minutes) minutes and $($durationPause.Seconds) seconds. Current status [$($resultsynapseSqlPool.Status)]"
-                    }
-                    else {
-                        Write-Host "This is a debug session - Nothing was done" -ForegroundColor Yellow
-                    }
-                }           
-            }
-            ##########################################################################################################################################################
-            else {
-                $iErrorCount += 1;
-                Write-Error "  -> ((SynapseSqlPool.Status -eq ""Online"")) Checking Synapse SQL Pool [$($SynapseSqlPool.DatabaseName)] found with status [$($SynapseSqlPool.Status)]"
-            }
-            ##########################################################################################################################################################
-           
-        }
-    }
 }
 
 ##########################################################################################################################################################
