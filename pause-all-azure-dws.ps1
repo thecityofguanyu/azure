@@ -125,9 +125,31 @@ for ($i = 0; $i -lt $AzureSynapseWorkspaces.Count; $i++) {
             $params = @{
                 'ConnectionString' = $connstring
                 'OutputSqlErrors'  = $true
-                'Query'            = 'if exists
-                ( select * from sys.dm_pdw_exec_sessions where status in (''ACTIVE'',''IDLE'') and (session_id <> session_id()) 
-                and (app_name not in (''Internal'',''DWShellDb'')) and (status in (''IDLE'') and login_time > DATEADD(minute, -30, GETDATE()))
+                'Query'            =
+@"
+                SELECT * FROM sys.dm_pdw_exec_sessions
+                WHERE (session_id <> session_id()) 
+                AND (app_name NOT IN ('Internal','DWShellDb'))
+                AND (STATUS = 'ACTIVE' OR
+                (STATUS IN ('IDLE') AND login_time > DATEADD(minute, -30, GETDATE())))
+"@
+            }
+            $sessionTable = Invoke-Sqlcmd  @params
+            Write-Output "  -> Current connections:"
+            $sessionTable
+
+            $params = @{
+                'ConnectionString' = $connstring
+                'OutputSqlErrors'  = $true
+                'Query'            =
+@"
+                if exists
+                (
+                SELECT * FROM sys.dm_pdw_exec_sessions
+                WHERE (session_id <> session_id()) 
+                AND (app_name NOT IN ('Internal','DWShellDb'))
+                AND (STATUS = 'ACTIVE' OR
+                (STATUS IN ('IDLE') AND login_time > DATEADD(minute, -30, GETDATE())))
                 )
                     begin
                         select 1;
@@ -135,21 +157,14 @@ for ($i = 0; $i -lt $AzureSynapseWorkspaces.Count; $i++) {
                 else
                     begin
                         select 0;
-                    end'
+                    end
+"@
                 }
 
-            $transactions = Invoke-Sqlcmd  @params
-            if ($transactions.Column1 -ne 0)
+            $activeSessionsPresent = Invoke-Sqlcmd  @params
+            if ($activeSessionsPresent.Column1 -ne 0)
             {
                 Write-Output "  -> There are active transactions with 30 minutes. Not pausing"
-                $params = @{
-                'ConnectionString' = $connstring
-                'OutputSqlErrors'  = $true
-                'Query'            = 'select * from sys.dm_pdw_exec_sessions where status in (''ACTIVE'',''IDLE'') and (session_id <> session_id()) and (app_name not in (''Internal'',''DWShellDb'')) and (status in (''IDLE'') and login_time > DATEADD(minute, -30, GETDATE()))'
-                }
-                $transactions = Invoke-Sqlcmd  @params
-                $transactions
-
                 continue
             }
             else
